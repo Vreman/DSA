@@ -1,0 +1,1080 @@
+### DSA Plot Generator v1.0
+
+# For more information, check the publication by Vreman et al
+# "The application and implications of novel deterministic sensitivity analysis methods"
+
+# Copyright (C) 2019, Rick Vreman
+# This program is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the
+# Free Software Foundation, either version 3 of the License, 
+# or (at your option) any later version.
+
+# This program is distributed in the hope that it will be useful, 
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. 
+# See the MIT License for more details 
+
+library('ggplot2')
+library('ggpubr')
+library('stringr')
+library('forcats')
+library('directlabels')
+library('ggrepel')
+
+### ---------------------  Data to be used as input. ---------------------- ### 
+# Your raw data should have the following characteristics 
+
+# - Saved as a .csv file
+# - Eight colums, in this order:
+# -   1) 'Scenario': Number of scenario (starting with 1, 2, 3, ...)
+# -   2) 'Parameter': Short parameter name
+# -   3) 'ScenarioNumb': Scenario per parameter 
+# (this goes from 1 to 21 for each parameter, 1 being the lowest)
+# -   4) 'Bound': whether this scenario is 'lower', 'upper' or 'base case' 
+# -   5) 'ICER': value of the ICER for each scenario
+# -   6) 'Labels': at scenario number 1, 11 (base case) and 21 for each 
+# parameter, the applicable values for the parameter
+# -   7) 'TypeRange': the range that is applied 
+# (e.g. 95% CI, -50% to +50%, or others)
+# -   8) 'FullName': the full parameter name to be displayed in the graph
+
+# Then, prepare to load your data:
+
+# - set the filename of your raw datafile, do not forget the .csv 
+# (e.g. "c://mydocuments/DSA/datainput.csv") )
+# - set whether your data has a header (ie, column names, this should be TRUE)
+# - set the type of decimal seperator (, or . within " ")
+# - set the column separator used for your .csv file (within " "). 
+# You can see the seperator when opening your csv file with, for example, Excel. 
+
+### ---------------------------- Load data -------------------------------- ###
+datSDSA <- read.csv2(file="C:/InputDSA.csv",header=TRUE,sep = ";",dec = ",")
+### ------------------------End of Loading data --------------------------- ###
+
+
+### ----------------------------------------------------------------------- ###
+### -----------------Getting data ready for the SDSA plot------------------ ###
+dat <- datSDSA
+# Set ICER values as numerical
+dat$ICER <- as.numeric(as.character(dat$ICER))
+# You may get a warning that NAs are introduced, this happens if ICERs are 
+# missing (e.g. not calculable ICERs)
+
+# Set NA ICERs at 0 (this default is decribed in the publication)
+dat$ICER[is.na(dat$ICER)] <- 0
+
+# Set the base case ICER
+ICER.basecase <- unique(dat$ICER[dat$Bound == 'base case'])
+ICER.BCround <- round(ICER.basecase,0)
+
+# Calculate ICERs relative to the base case instead of absolute
+dat$relICER <- dat$ICER - ICER.basecase
+
+# Replace base case bound with NA value (necessary for plot generation)
+dat$Bound[dat$Bound == "base case"] <- NA
+
+# Create the names to be used in the plot, 
+# including the parameter name + the description of the range
+dat$Parameter2 <- paste(dat$FullName, "(", dat$TypeRange, ")")
+dat$Parameter2 <- gsub('\\(', '\n(', dat$Parameter2)
+
+## Construction of the order and the labels of the plot
+# Get a vector of the short parameter names
+parameters <- as.character(unlist(unique(dat$Parameter)))
+
+# Calculate the absolute range of each parameter (for plot order)
+absrange <- as.numeric(c(rep(NA, length(parameters))))
+for (i in 1:length(parameters)) {
+  absrange[i] <- abs(max(dat$relICER[dat$Parameter == parameters[i]]) - 
+                       min(dat$relICER[dat$Parameter == parameters[i]]))
+}
+
+dat$CatOrder <- rep(absrange, each = max(dat$ScenarioNumb))
+orderdat <- order(dat$CatOrder)
+
+# Create labels in order
+LabelsOrdered <- dat$Labels[orderdat]
+LabelsOrdered <- as.numeric(as.character(LabelsOrdered))
+
+# Generate a vector for the positions of the labels of the plot
+labelpos <- as.numeric()
+for (i in 0:(length(unique(dat$Parameter)) - 1)) {
+  labelpos <- c(labelpos,i + 0.65)
+  labelpos <- c(labelpos,i + 1)
+  labelpos <- c(labelpos,i + 1.35)
+}
+dat$xCoords[!is.na(dat$Labels)] <- labelpos
+
+# Combine the label text with the position of the labels into a data frame
+labelsdat <- cbind(dat$xCoords, LabelsOrdered)
+
+### ----------------End of getting data ready for the plot----------------- ###
+### ----------------------------------------------------------------------- ###
+
+
+### ----------------------------------------------------------------------- ###
+### --------------------------Generating the plot-------------------------- ###
+
+# Set limits of the graph. With your own data you will probably have to try 
+# a few times before getting it right
+
+# Get minimum
+min(dat$relICER)
+# Get maximum
+max(dat$relICER)
+# Set limits (round down from min and up from max)
+xaxismin <- -50000
+xaxismax <- 68000
+limits <- c(xaxismin, xaxismax)
+
+# Set where labels are placed, 
+# the minimum should be slightly higher than the min limit
+breaks <- c(-20000, 60000)
+
+# Set how often labels are placed
+breaks.by <- 20000
+
+# Set the values displayed in the labels 
+xlabels <- seq(breaks[1], breaks[2], breaks.by)
+breaksset <- seq(-20000 - ICER.basecase, 60000 - ICER.basecase, breaks.by)
+
+datnumbers <- dat$ScenarioNumb + 10
+dat$dodge <- paste(dat$Bound,datnumbers)
+colorsdodge <- c(rep("#F8766D",10), "#000000", rep("#00BFC4",10))
+
+# sDSA plot
+ggSDSA <- ggplot(data = dat, aes(x = Parameter2, y = relICER, fill = dodge)) +
+  geom_bar(stat = "identity", position = "dodge",
+           aes(x = fct_reorder(dat$Parameter2, dat$CatOrder, .desc = FALSE))) +
+  theme(axis.ticks.y = element_blank()) +
+  theme(panel.grid = element_blank()) +
+  theme(panel.grid.major.x = element_line(colour = "grey80")) +
+  theme(panel.grid.minor.x = element_line(colour = "grey80")) +
+  scale_y_continuous(name = paste("Incremental Cost-Effectiveness Ratio (base case \u20ac", 
+                                  ICER.BCround, 
+                                  "/QALY)"), 
+                     breaks = breaksset,
+                     limits = limits, labels = xlabels) +
+  scale_fill_manual(breaks = c("lower 11","upper 31"), 
+                    labels=c("Lower range", "Upper range"),
+                    values = colorsdodge) +
+  scale_x_discrete(name = "Parameter", 
+                   breaks = dat$Parameter2, 
+                   labels = dat$Parameter2) +
+  theme(legend.title = element_blank(), 
+        legend.position = "bottom", 
+        legend.text = element_text(size = 14)) +
+  theme(axis.text.x = element_text(size = 13), 
+        axis.text.y = element_text(size = 14), 
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_blank()) +
+  geom_vline(xintercept = seq(1, length(dat[, 1]), 1) + 0.5, color = "grey74") +
+  geom_hline(yintercept = -ICER.basecase, color = "grey50") +
+  geom_hline(yintercept = 0, color = "grey50", linetype = "dashed") +
+  annotate("text", x = labelsdat[, 1], y = xaxismin, label = labelsdat[, 2], 
+           colour = "grey50", size = 5, hjust = 0) +
+  coord_flip() 
+
+# cDSA plot
+dat2 <- dat[!is.na(dat$Labels), ]
+
+ggCDSA <- ggplot(data= dat2, aes(x = FullName, y = relICER, fill = Bound)) +
+  geom_bar(stat = "identity", 
+           aes(x = fct_reorder(dat2$FullName, dat2$CatOrder, .desc = FALSE))) +
+  theme(axis.ticks.y = element_blank()) +
+  theme(panel.grid = element_blank()) +
+  theme(panel.grid.major.x = element_line(colour = "grey80")) +
+  theme(panel.grid.minor.x = element_line(colour = "grey80")) +
+  scale_y_continuous(name = paste("Incremental Cost-Effectiveness Ratio (base case \u20ac",
+                                  ICER.BCround,
+                                  "/QALY)"), 
+                     breaks = breaksset,
+                     limits = limits, labels = xlabels) +
+  scale_fill_manual(breaks = c("lower", "upper"),
+                    labels=c("Lower range", "Upper range"),
+                    values = c("#F8766D", "#00BFC4")) +
+  scale_x_discrete(name = "Parameter", 
+                   breaks = dat2$FullName, 
+                   labels = dat2$FullName) +
+  theme(axis.title.y = element_blank()) +
+  theme(legend.title = element_blank(),
+        legend.position = "bottom", 
+        legend.text = element_text(size = 14)) +
+  theme(axis.text.x = element_text(size = 13),
+        axis.text.y = element_text(size = 14),
+        axis.title.x = element_text(size = 16)) +
+  geom_vline(xintercept = seq(1, length(dat[, 1]), 1) + 0.5, color = "grey74") +
+  geom_hline(yintercept = -ICER.basecase, color = "grey50") +
+  geom_hline(yintercept = 0, color = "grey50", linetype = "dashed") +
+  coord_flip() 
+
+# Combine both plots in 1 figure
+final.figure <- ggarrange(ggCDSA, ggSDSA, heights = 1,
+                          ncol = 2, nrow = 1, align = "hv")
+final.figure
+
+### ----------------------------------------------------------------------- ###
+### -------------------- Options for Saving your plot --------------------- ###
+## This figure number matches that of the publication
+png(filename="C:/Figure1.png", units="cm", width=45, height=30, res=1200)
+plot(final.figure)
+dev.off()
+
+
+### -------------------- Figure 3 and 4 for SDSA --------------------- ###
+# Third figure showing dominated sections
+dat$domin <- NA
+dat <- within(dat, {
+  f <- IncrC <= 0 & IncrQ > 0
+  domin[f] <- 'Dominates'
+  g <- IncrC > 0 & IncrQ <= 0
+  domin[g] <- 'Dominated'
+}) 
+
+alphas <- c(rep(0.8, 52), rep(0.1, 100), rep(1, 100))
+dat$Alphas <- NA
+dat <- within(dat, {
+    f <- IncrC <= 0 & IncrQ > 0
+    Alphas[f] <- 0.45
+    g <- IncrC > 0 & IncrQ <= 0
+    domin[g] <- 0.8
+    h <- IncrC > 0 & IncrQ >= 0
+    Alphas[h] <- 0.5
+    i <- IncrC <= 0 & IncrQ < 0
+    Alphas[i] <- 0.5
+}) 
+
+
+ggSDSAdom <- ggplot(data = dat, aes(x = Parameter2, y = relICER, fill = dodge)) +
+  geom_bar(stat = "identity", position = "dodge",
+           aes(x = fct_reorder(dat$Parameter2, dat$CatOrder, .desc = FALSE), alpha = dat$Alphas)) +
+  theme(axis.ticks.y = element_blank()) +
+  theme(panel.grid = element_blank()) +
+  theme(panel.grid.major.x = element_line(colour = "grey80")) +
+  theme(panel.grid.minor.x = element_line(colour = "grey80")) +
+  scale_y_continuous(name = paste("Incremental Cost-Effectiveness Ratio (base case \u20ac", 
+                                  ICER.BCround, 
+                                  "/QALY)"), 
+                     breaks = breaksset,
+                     limits = limits, labels = xlabels) +
+  scale_fill_manual(breaks = c("lower 11","upper 31"), 
+                    labels=c("Lower range", "Upper range"),
+                    values = colorsdodge) +
+  scale_x_discrete(name = "Parameter", 
+                   breaks = dat$Parameter2, 
+                   labels = dat$Parameter2) +
+  scale_alpha(range = c(0.6, 1.0), guide = 'none') + 
+  theme(legend.title = element_blank(), 
+        legend.position = "bottom", 
+        legend.text = element_text(size = 14)) +
+  theme(axis.text.x = element_text(size = 13), 
+        axis.text.y = element_text(size = 14), 
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_blank()) +
+  geom_vline(xintercept = seq(1, length(dat[, 1]), 1) + 0.5, color = "grey74") +
+  geom_hline(yintercept = -ICER.basecase, color = "grey50") +
+  geom_hline(yintercept = 0, color = "grey50", linetype = "dashed") +
+  annotate("text", x = labelsdat[, 1], y = xaxismin, label = labelsdat[, 2], 
+           colour = "grey50", size = 5, hjust = 0) +
+  coord_flip() 
+
+
+# Fourth figure with INMB
+dat$INMB <- (dat$IncrQ * 20000) - dat$IncrC
+SDSA.BC.INMB <- (dat$IncrQ[11] * 20000) - dat$IncrC[11] 
+dat$relINMB <- dat$INMB - SDSA.BC.INMB
+
+min(dat$INMB)
+max(dat$INMB)
+xaxismininmb <- -10000
+xaxismaxinmb <- 10000
+limitsinmb <- c(xaxismininmb, xaxismaxinmb)
+
+# Set where labels are placed, 
+# the minimum should be slightly higher than the min limit
+breaksinmb <- c(-10000, 10000)
+
+# Set how often labels are placed
+breaks.byinmb <- 5000
+
+# Set the values displayed in the labels 
+xlabelsinmb <- seq(breaksinmb[1], breaksinmb[2], breaks.byinmb)
+breakssetinmb <- seq(-10000 - SDSA.BC.INMB, 10000 - SDSA.BC.INMB, breaks.byinmb)
+
+ggSDSAINMB <- ggplot(data = dat, aes(x = Parameter2, y = relINMB, fill = dodge)) +
+  geom_bar(stat = "identity", position = "dodge",
+           aes(x = fct_reorder(dat$Parameter2, dat$CatOrder, .desc = FALSE), alpha = dat$Alphas)) +
+  theme(axis.ticks.y = element_blank()) +
+  theme(panel.grid = element_blank()) +
+  theme(panel.grid.major.x = element_line(colour = "grey80")) +
+  theme(panel.grid.minor.x = element_line(colour = "grey80")) +
+  scale_y_continuous(name = paste("Incremental Net Monetary Benefit (base case \u20ac", 
+                                  SDSA.BC.INMB,
+                                  ")"), 
+                     breaks = breakssetinmb,
+                     limits = limitsinmb, labels = xlabelsinmb) +
+  scale_fill_manual(breaks = c("lower 11","upper 31"), 
+                    labels=c("Lower range", "Upper range"),
+                    values = colorsdodge) +
+  scale_x_discrete(name = "Parameter", 
+                   breaks = dat$Parameter2, 
+                   labels = dat$Parameter2) +
+  scale_alpha(range = c(0.6, 1.0), guide = 'none') + 
+  theme(legend.title = element_blank(), 
+        legend.position = "bottom", 
+        legend.text = element_text(size = 14)) +
+  theme(axis.text.x = element_text(size = 13), 
+        axis.text.y = element_text(size = 14), 
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_blank()) +
+  geom_vline(xintercept = seq(1, length(dat[, 1]), 1) + 0.5, color = "grey74") +
+  geom_hline(yintercept = 0, color = "grey50", linetype = "dashed") +
+  geom_hline(yintercept = -SDSA.BC.INMB, color = "grey50") +
+  annotate("text", x = labelsdat[, 1], y = xaxismininmb, label = labelsdat[, 2], 
+           colour = "grey50", size = 5, hjust = 0) +
+  coord_flip() 
+
+final.figure2 <- ggarrange(ggSDSAdom, ggSDSAINMB, heights = 1,
+                          ncol = 2, nrow = 1, align = "hv")
+final.figure2
+
+png(filename="C:/Figure2.png", units="cm", width=45, height=30, res=1200)
+plot(final.figure2)
+dev.off()
+### ---------------------------End of SDSA--------------------------------- ###
+### ----------------------------------------------------------------------- ###
+
+
+
+
+### ----------------------------------------------------------------------- ###
+### --------------------------- Start of DDSA ----------------------------- ###
+datDDSA <- read.csv2(file="C:/RinputDDSA.csv",header=TRUE,sep = ";",dec = ",")
+datdec <- datDDSA
+
+datdec$ICER <- as.numeric(as.character(datdec$ICER))
+datdec$ICER[is.na(datdec$ICER)] <- 0
+
+ICER.basecase.dec <- unique(datdec$ICER[datdec$Bound == 'base case'])
+ICER.BCrounddec <- round(ICER.basecase.dec,0)
+
+datdec$relICER <- datdec$ICER - ICER.basecase.dec
+datdec$Bound[datdec$Bound == "base case"] <- NA
+
+datdec$Parameter2 <- paste(datdec$FullName, "(", datdec$TypeRange, ")")
+datdec$Parameter2 <- gsub('\\(', '\n(', datdec$Parameter2)
+
+parametersdec <- as.character(unlist(unique(datdec$Parameter)))
+
+absrangedec <- as.numeric(c(rep(NA, length(parametersdec))))
+for (i in 1:length(parametersdec)) {
+  absrangedec[i] <- abs(max(datdec$relICER[datdec$Parameter == parametersdec[i]]) - 
+                       min(datdec$relICER[datdec$Parameter == parametersdec[i]]))
+}
+
+datdec$CatOrder <- rep(absrangedec, each = max(datdec$ScenarioNumb))
+orderdatdec <- order(datdec$CatOrder)
+
+LabelsOrdereddec <- datdec$Labels[orderdatdec]
+LabelsOrdereddec <- as.numeric(as.character(LabelsOrdereddec))
+
+# Generate a vector for the positions of the labels of the plot
+labelposdec <- as.numeric()
+for (i in 0:(length(unique(datdec$Parameter)) - 1)) {
+  labelposdec <- c(labelposdec,i + 0.65)
+  labelposdec <- c(labelposdec,i + 1)
+  labelposdec <- c(labelposdec,i + 1.35)
+}
+datdec$xCoords[!is.na(datdec$Labels)] <- labelposdec
+
+
+datdec$domin <- NA
+datdec <- within(datdec, {
+  f <- IncrC <= 0 & IncrQ > 0
+  domin[f] <- 'Dominates'
+  g <- IncrC > 0 & IncrQ <= 0
+  domin[g] <- 'Dominated'
+}) 
+
+alphasdec <- c(rep(0.8, 52), rep(0.1, 100), rep(1, 100))
+datdec$Alphas <- NA
+datdec <- within(datdec, {
+  f <- IncrC <= 0 & IncrQ > 0
+  Alphas[f] <- 0.45
+  g <- IncrC > 0 & IncrQ <= 0
+  domin[g] <- 0.8
+  h <- IncrC > 0 & IncrQ >= 0
+  Alphas[h] <- 0.5
+  i <- IncrC <= 0 & IncrQ < 0
+  Alphas[i] <- 0.5
+}) 
+
+
+# Combine the label text with the position of the labels into a data frame
+labelsdatdec <- cbind(datdec$xCoords, LabelsOrdereddec)
+
+# Set plot ranges
+min(datdec$relICER)
+max(datdec$relICER)
+xaxismindec <- -50000
+xaxismaxdec <- 68000
+limitsdec <- c(xaxismindec, xaxismaxdec)
+breaksdec <- c(-20000, 60000)
+breaks.bydec <- 20000
+xlabelsdec <- seq(breaksdec[1], breaksdec[2], breaks.bydec)
+breakssetdec <- seq(-20000 - ICER.basecase.dec, 60000 - ICER.basecase.dec, breaks.by)
+
+# Make the dodging of the bars nicer
+datdecnumbers <- datdec$ScenarioNumb + 10
+datdec$dodge <- paste(datdec$Bound,datnumbers)
+deccolorsdodge <- c(rep("#F8766D",10), "#000000", rep("#00BFC4",10))
+
+# DDSA plot
+ggDDSA <- ggplot(data = datdec, aes(x = Parameter2, y = relICER, fill = dodge)) +
+  geom_bar(stat = "identity", position = "dodge",
+           aes(x = fct_reorder(datdec$Parameter2, dat$CatOrder, .desc = FALSE), alpha = datdec$Alphas)) +
+  theme(axis.ticks.y = element_blank()) +
+  theme(panel.grid = element_blank()) +
+  theme(panel.grid.major.x = element_line(colour = "grey80")) +
+  theme(panel.grid.minor.x = element_line(colour = "grey80")) +
+  scale_y_continuous(name = paste("Incremental Cost-Effectiveness Ratio (base case \u20ac", 
+                                  ICER.BCrounddec, 
+                                  "/QALY)"), 
+                     breaks = breakssetdec,
+                     limits = limitsdec, labels = xlabelsdec) +
+  scale_fill_manual(breaks = c("lower 11","upper 31"), 
+                    labels=c("Lower range", "Upper range"),
+                    values = deccolorsdodge) +
+  scale_x_discrete(name = "Parameter", 
+                   breaks = datdec$Parameter2, 
+                   labels = datdec$Parameter2) +
+  scale_alpha(range = c(0.6, 1.0), guide = 'none') + 
+  theme(legend.title = element_blank(), 
+        legend.position = "bottom", 
+        legend.text = element_text(size = 14)) +
+  theme(axis.text.x = element_text(size = 13), 
+        axis.text.y = element_text(size = 14), 
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_blank()) +
+  geom_vline(xintercept = seq(1, length(datdec[, 1]), 1) + 0.5, color = "grey74") +
+  geom_hline(yintercept = -ICER.basecase.dec, color = "grey50") +
+  geom_hline(yintercept = 0, color = "grey50", linetype = "dashed") +
+  annotate("text", x = labelsdat[, 1], y = xaxismindec, label = labelsdat[, 2], 
+           colour = "grey50", size = 5, hjust = 0) +
+  coord_flip() 
+
+# Combine both plots in 1 figure
+final.figure2.1 <- ggarrange(ggSDSAdom, ggDDSA, heights = 1,
+                          ncol = 2, nrow = 1, align = "hv")
+final.figure2.1
+
+png(filename="C:/Figure3.png", units="cm", width=45, height=30, res=1200)
+plot(final.figure2.1)
+dev.off()
+
+
+###------------------------Figure 4 of DDSA---------------------------###
+# Figure 4a: DDSA with INMB
+datdec$INMB <- (datdec$IncrQ * 20000) - datdec$IncrC
+DDSA.BC.INMB <- (datdec$IncrQ[11] * 20000) - datdec$IncrC[11] 
+DDSA.BC.INMB.round <- round(DDSA.BC.INMB,0)
+datdec$relINMB <- datdec$INMB - DDSA.BC.INMB
+
+min(datdec$INMB)
+max(datdec$INMB)
+xaxismininmbdec <- -10000
+xaxismaxinmbdec <- 10000
+limitsinmbdec <- c(xaxismininmbdec, xaxismaxinmbdec)
+breaksinmbdec <- c(-10000, 10000)
+breaks.byinmbdec <- 5000
+xlabelsinmbdec <- seq(breaksinmbdec[1], breaksinmbdec[2], breaks.byinmbdec)
+breakssetinmbdec <- seq(-10000 - DDSA.BC.INMB, 10000 - DDSA.BC.INMB, breaks.byinmbdec)
+
+ggDDSAINMB <- ggplot(data = datdec, aes(x = Parameter2, y = relINMB, fill = dodge)) +
+  geom_bar(stat = "identity", position = "dodge",
+           aes(x = fct_reorder(datdec$Parameter2, dat$CatOrder, .desc = FALSE), alpha = datdec$Alphas)) +
+  theme(axis.ticks.y = element_blank()) +
+  theme(panel.grid = element_blank()) +
+  theme(panel.grid.major.x = element_line(colour = "grey80")) +
+  theme(panel.grid.minor.x = element_line(colour = "grey80")) +
+  scale_y_continuous(name = paste("Incremental Net Monetary Benefit (base case \u20ac", 
+                                  DDSA.BC.INMB.round,
+                                  ")"), 
+                     breaks = breakssetinmbdec,
+                     limits = limitsinmbdec, labels = xlabelsinmbdec) +
+  scale_fill_manual(breaks = c("lower 11","upper 31"), 
+                    labels=c("Lower range", "Upper range"),
+                    values = deccolorsdodge) +
+  scale_x_discrete(name = "Parameter", 
+                   breaks = datdec$Parameter2, 
+                   labels = datdec$Parameter2) +
+  scale_alpha(range = c(0.6, 1.0), guide = 'none') + 
+  theme(legend.title = element_blank(), 
+        legend.position = "bottom", 
+        legend.text = element_text(size = 14)) +
+  theme(axis.text.x = element_text(size = 13), 
+        axis.text.y = element_text(size = 14), 
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_blank()) +
+  geom_vline(xintercept = seq(1, length(datdec[, 1]), 1) + 0.5, color = "grey74") +
+  geom_hline(yintercept = 0, color = "grey50", linetype = "dashed") +
+  geom_hline(yintercept = -DDSA.BC.INMB, color = "grey50") +
+  annotate("text", x = labelsdat[, 1], y = xaxismininmbdec, label = labelsdat[, 2], 
+           colour = "grey50", size = 5, hjust = 0) +
+  coord_flip() 
+
+
+## Figure 4b: DDSA INMB in line chart
+DDSAdeciles <- c(seq(0.025, 0.475, 0.05),0.5,seq(0.525, 0.975, 0.05))
+DDSAdecilesfull <- rep(decilesprob, 12)
+datdec$Deciles <- DDSAdecilesfull
+
+linetype <- c(rep(c(1,1,1,1),3)) # can be 0 to 6, with 0 being blank, 1 solid, 2 dashed .... etc
+markertype <- seq(0, 11, 1)
+verticallines <- c(0.025, 0.125,0.25, 0.75,0.875,0.975)
+
+xscalebreaks <- c(0.025, 0.125, 0.250, 0.500, 0.750, 0.875, 0.975)
+xscalelimits <- c(0,1)
+xscalelabels <- c("2.5", "12.5", "25.0", "50.0", "75.0", "87.5", "97.5")
+
+## Line plot DDSA with INMB
+ggDDSAINMBline <- ggplot(data = datdec, aes(x = Deciles, y = relINMB, group = Parameter2)) +
+  geom_line(aes(color=Parameter2, linetype=Parameter2)) +
+  geom_point(aes(color=Parameter2, shape = Parameter2)) +
+  scale_linetype_manual(values = linetype) +
+  scale_shape_manual(values = markertype) +
+  scale_y_continuous(name = paste("Incremental Net Monetary Benefit (base case \u20ac", 
+                                  DDSA.BC.INMB.round,
+                                  ")"), 
+                     breaks = breakssetinmbdec,
+                     limits = limitsinmbdec, labels = xlabelsinmbdec) +
+  #xlab("Percentile of parameter distribution") + 
+  scale_x_continuous(name = "Percentile of parameter distribution", 
+                   breaks = xscalebreaks, 
+                   labels = xscalelabels, 
+                   limits = xscalelimits) +
+  geom_vline(xintercept = verticallines, linetype="dashed",color = "grey80", size = 1) +
+  theme(panel.background = element_rect(fill="white", colour = "black"),
+        panel.grid.major.y = element_line(colour="grey80"), 
+        panel.grid.major.x = element_blank(),
+        legend.title = element_blank(), 
+        legend.position = "right", 
+        legend.text = element_text(size = 14), 
+        axis.text.x = element_text(size = 13), 
+        axis.text.y = element_text(size = 14), 
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_text(size = 16) 
+        #,axis.ticks.y = element_line(colour="grey80")
+        ) +
+  geom_hline(yintercept = 0, color = "grey50", linetype = "dashed") +
+  geom_hline(yintercept = -DDSA.BC.INMB, color = "grey50")
+  
+ggDDSAINMBline
+
+# Combine in one plot
+final.figure2.2 <- ggarrange(ggDDSAINMB, ggDDSAINMBline, heights = 1,
+                           ncol = 2, nrow = 1, align = "hv",  widths = c(1, 1.2))
+final.figure2.2
+
+png(filename="C:/Figure4.png", units="cm", width=49.5, height=30, res=1200)
+plot(final.figure2.2)
+dev.off()
+### ---------------------------End of DDSA--------------------------------- ###
+### ----------------------------------------------------------------------- ###
+
+
+
+### ----------------------------------------------------------------------- ###
+### --------------------------- Start of PDSA ----------------------------- ###
+## The data is loaded in 5 separate CSVs (since Excel has a maximum number of rows and we needed 2.5 million)
+datPDSA1 <- read.csv2(file="C:/RinputProb v3.1.csv",header=TRUE,sep = ";",dec = ",")
+datPDSA1 <- datPDSA1[2:504001,]
+datPDSA2 <- read.csv2(file="C:/RinputProb v3.2.csv",header=TRUE,sep = ";",dec = ",")
+datPDSA2 <- datPDSA2[2:504001,]
+datPDSA3 <- read.csv2(file="C:/RinputProb v3.3.csv",header=TRUE,sep = ";",dec = ",")
+datPDSA3 <- datPDSA3[2:504001,]
+datPDSA4 <- read.csv2(file="C:/RinputProb v3.4.csv",header=TRUE,sep = ";",dec = ",")
+datPDSA4 <- datPDSA4[2:504001,]
+datPDSA5 <- read.csv2(file="C:/RinputProb v3.5.csv",header=TRUE,sep = ";",dec = ",")
+datPDSA5 <- datPDSA5[2:504001,]
+
+datPDSA <- rbind(datPDSA1, datPDSA2, datPDSA3, datPDSA4, datPDSA5)
+vectexcl <- c(which(datPDSA$IncrC>200000))
+datexclPDSA <- datPDSA
+datexclPDSA[vectexcl,] <- NA
+datexclPDSA$parval <- rep(c(rep(1:252, each = 2000)),5)
+datexclPDSA$INMB <- (datexclPDSA$IncrQ * 20000) - datexclPDSA$IncrC
+datexclPDSAs <- aggregate(datexclPDSA[,1:21],by=list(datexclPDSA$parval), mean, na.rm=TRUE)
+
+datpromeans <- apply(datexclPDSA,MARGIN = 2,mean, na.rm = TRUE)
+datprosds <- apply(datexclPDSA,MARGIN = 2,sd, na.rm = TRUE)
+ICER.BC.PDSA <- as.numeric(datpromeans[17] / datpromeans[18])
+ICER.BC.PDSA.round <- round(ICER.BC.PDSA,0)
+
+#datprob <- datPDSA
+#datprob$parval <- rep(c(rep(1:252, each = 2000)),5)
+#datprob$INMB <- (datprob$IncrQ * 20000) - datprob$IncrC
+#names(datprob)[names(datprob) == "ICER"] <- "ICERprob"
+#datstats <- aggregate(datprob[,1:21],by=list(datprob$parval), mean)
+datpro <- cbind(datexclPDSAs, datdec[,1:4],datdec[,6:8],datdec[,12:14])
+names(datpro)[names(datpro) == "ICER"] <- "ICERprob"
+
+
+# Checking the range of ICERs
+mean(datpro$IncrQ[1:84])
+median(datpro$IncrQ[1:84])
+incrqvar <- datpro$IncrQ[1:84] - 0.35994
+max(incrqvar)
+min(incrqvar)
+mean(incrqvar)
+quantile(incrqvar, 0.75)
+incrqvarind <- max(incrqvar)
+
+
+# ICER calculations
+datpro$ICERfromCQ <- datpro$IncrC / datpro$IncrQ
+datpro$relICERfromCQ <- datpro$ICERfromCQ - ICER.BC.PDSA
+
+proICERbc <- datpro$ICERfromCQ[datpro$ScenarioNumb==11]
+proICERsBC <- rep(proICERbc, each = 21)
+datpro$relICERfromCQpar <- datpro$ICERfromCQ - proICERsBC
+
+# Dominated info
+datpro$domin <- NA
+datpro <- within(datpro, {
+  f <- IncrC <= 0 & IncrQ > 0
+  domin[f] <- 'Dominates'
+  g <- IncrC > 0 & IncrQ <= 0
+  domin[g] <- 'Dominated'
+}) 
+
+alphaspro <- c(rep(0.8, 52), rep(0.1, 100), rep(1, 100))
+datpro$Alphas <- NA
+datpro <- within(datpro, {
+  f <- IncrC <= 0 & IncrQ > 0
+  Alphas[f] <- 0.45
+  g <- IncrC > 0 & IncrQ <= 0
+  domin[g] <- 0.8
+  h <- IncrC > 0 & IncrQ >= 0
+  Alphas[h] <- 0.5
+  i <- IncrC <= 0 & IncrQ < 0
+  Alphas[i] <- 0.5
+}) 
+
+# Ordering if necessary
+parameterspro <- as.character(unlist(unique(datpro$Parameter)))
+
+absrangepro <- as.numeric(c(rep(NA, length(parameterspro))))
+for (i in 1:length(parameterspro)) {
+  absrangepro[i] <- abs(max(datpro$relICERfromCQpar[datpro$Parameter == parameterspro[i]]) - 
+                        min(datpro$relICERfromCQpar[datpro$Parameter == parameterspro[i]]))
+}
+
+datpro$CatOrder <- rep(absrangepro, each = max(datpro$ScenarioNumb))
+orderdatpro <- order(datpro$CatOrder)
+
+# Ordering INMB if necessary
+parametersproinmb <- as.character(unlist(unique(datpro$Parameter)))
+
+absrangeproinmb <- as.numeric(c(rep(NA, length(parametersproinmb))))
+for (i in 1:length(parametersproinmb)) {
+  absrangeproinmb[i] <- abs(max(datpro$relINMBpar[datpro$Parameter == parametersproinmb[i]]) - 
+                            min(datpro$relINMBpar[datpro$Parameter == parametersproinmb[i]]))
+}
+
+datpro$CatOrderInmb <- rep(absrangeproinmb, each = max(datpro$ScenarioNumb))
+orderdatproinmb <- order(datpro$CatOrderInmb)
+
+# Set limits and breaks
+min(datpro$relICERfromCQ)
+max(datpro$relICERfromCQ)
+xaxisminpro <- -50000
+xaxismaxpro <- 98000
+limitspro <- c(xaxisminpro, xaxismaxpro)
+breakspro <- c(-20000, 80000)
+breaks.bypro <- 20000
+xlabelspro <- seq(breakspro[1], breakspro[2], breaks.bypro)
+breakssetpro <- seq(-20000 - ICER.BC.PDSA, 80000 - ICER.BC.PDSA, breaks.bypro)
+
+# Nicer dodge
+datpronumbers <- datpro$ScenarioNumb + 10
+datpro$dodge <- paste(datpro$Bound,datnumbers)
+procolorsdodge <- c(rep("#F8766D",10), "#000000", rep("#00BFC4",10))
+
+
+# First plot (ICER unstacked)
+ggPDSA <- ggplot(data = datpro, aes(x = Parameter2, y = relICERfromCQpar, fill = dodge)) +
+  geom_bar(stat = "identity", position = "dodge",
+           aes(x = fct_reorder(datpro$Parameter2, dat$CatOrder, .desc = FALSE), alpha = datpro$Alphas)) +
+  theme(axis.ticks.y = element_blank()) +
+  theme(panel.grid = element_blank()) +
+  theme(panel.grid.major.x = element_line(colour = "grey80")) +
+  theme(panel.grid.minor.x = element_line(colour = "grey80")) +
+  scale_y_continuous(name = paste("Incremental Cost-Effectiveness Ratio (prob. means)"
+                                  #\u20ac", 
+                                  #ICER.BC.PDSA.round, 
+                                  #"/QALY)"
+                                  ), 
+                     breaks = breakssetpro,
+                     limits = limitspro, labels = xlabelspro) +
+  scale_fill_manual(breaks = c("lower 11","upper 31"), 
+                    labels=c("Lower range", "Upper range"),
+                    values = procolorsdodge) +
+  scale_x_discrete(name = "Parameter", 
+                   breaks = datpro$Parameter2, 
+                   labels = datpro$Parameter2) +
+  scale_alpha(range = c(0.6, 1.0), guide = 'none') + 
+  theme(legend.title = element_blank(), 
+        legend.position = "bottom", 
+        legend.text = element_text(size = 14)) +
+  theme(axis.text.x = element_text(size = 13), 
+        axis.text.y = element_text(size = 14), 
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_blank()) +
+  geom_vline(xintercept = seq(1, length(datpro[, 1]), 1) + 0.5, color = "grey74") +
+  geom_hline(yintercept = -ICER.BC.PDSA, color = "grey50") +
+  geom_hline(yintercept = 0, color = "grey50", linetype = "dashed") +
+  annotate("text", x = labelsdat[, 1], y = xaxismindec, label = labelsdat[, 2], 
+           colour = "grey50", size = 5, hjust = 0) +
+  coord_flip() 
+
+ggPDSA
+
+# Combine both plots in 1 figure
+final.figure3.1 <- ggarrange(ggDDSA, ggPDSA, heights = 1,
+                             ncol = 2, nrow = 1, align = "hv")
+final.figure3.1
+
+png(filename="C:/Figure7.png", units="cm", width=45, height=30, res=1200)
+plot(final.figure3.1)
+dev.off()
+
+
+##------------------- PDSA third and fourth figure--------------------###
+# Figure 3: PDSA with INMB
+datpro$INMBfromMeanCQ <- (datpro$IncrQ * 20000) - datpro$IncrC
+PDSA.BC.INMB <- as.numeric((datpromeans[18] * 20000) - datpromeans[17])
+PDSA.BC.INMB.round <- as.numeric(round(PDSA.BC.INMB,0))
+datpro$relINMB <- datpro$INMBfromMeanCQ - PDSA.BC.INMB
+
+proINMBbc <- datpro$INMBfromMeanCQ[datpro$ScenarioNumb==11]
+proINMBsBC <- rep(proINMBbc, each = 21)
+datpro$relINMBpar <- datpro$INMBfromMeanCQ - proINMBsBC
+
+min(datpro$INMB)
+max(datpro$INMB)
+xaxismininmbpro <- -10000
+xaxismaxinmbpro <- 10000
+limitsinmbpro <- c(xaxismininmbpro, xaxismaxinmbpro)
+breaksinmbpro <- c(-10000, 10000)
+breaks.byinmbpro <- 5000
+xlabelsinmbpro <- seq(breaksinmbpro[1], breaksinmbpro[2], breaks.byinmbpro)
+breakssetinmbpro <- seq(-10000 - PDSA.BC.INMB, 10000 - PDSA.BC.INMB, breaks.byinmbpro)
+
+ggPDSAINMB <- ggplot(data = datpro, aes(x = Parameter2, y = relINMBpar, fill = dodge)) +
+  geom_bar(stat = "identity", position = "dodge",
+           aes(x = fct_reorder(datpro$Parameter2, dat$CatOrder, .desc = FALSE), alpha = datpro$Alphas)) +
+  theme(axis.ticks.y = element_blank()) +
+  theme(panel.grid = element_blank()) +
+  theme(panel.grid.major.x = element_line(colour = "grey80")) +
+  theme(panel.grid.minor.x = element_line(colour = "grey80")) +
+  scale_y_continuous(name = paste("Incremental Net Monetary Benefit (prob. means)"
+                                  #\u20ac", 
+                                  #PDSA.BC.INMB.round,
+                                  #")"
+                                  ), 
+                     breaks = breakssetinmbpro,
+                     limits = limitsinmbpro, labels = xlabelsinmbpro) +
+  scale_fill_manual(breaks = c("lower 11","upper 31"), 
+                    labels=c("Lower range", "Upper range"),
+                    values = procolorsdodge) +
+  scale_x_discrete(name = "Parameter", 
+                   breaks = datpro$Parameter2, 
+                   labels = datpro$Parameter2) +
+  scale_alpha(range = c(0.6, 1.0), guide = 'none') + 
+  theme(legend.title = element_blank(), 
+        legend.position = "bottom", 
+        legend.text = element_text(size = 14)) +
+  theme(axis.text.x = element_text(size = 13), 
+        axis.text.y = element_text(size = 14), 
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_blank()) +
+  geom_vline(xintercept = seq(1, length(datpro[, 1]), 1) + 0.5, color = "grey74") +
+  geom_hline(yintercept = 0, color = "grey50", linetype = "dashed") +
+  geom_hline(yintercept = -PDSA.BC.INMB, color = "grey50") +
+  annotate("text", x = labelsdat[, 1], y = xaxismininmbpro, label = labelsdat[, 2], 
+           colour = "grey50", size = 5, hjust = 0) +
+  coord_flip() 
+
+ggPDSAINMB
+
+## Fourth figure: PDSA INMB in line chart
+PDSAdeciles <- c(seq(0.025, 0.475, 0.05),0.5,seq(0.525, 0.975, 0.05))
+PDSAdecilesfull <- rep(PDSAdeciles, 12)
+datpro$Deciles <- DDSAdecilesfull
+
+linetype <- c(rep(c(1,1,1,1),3)) # can be 0 to 6, with 0 being blank, 1 solid, 2 dashed .... etc
+markertype <- seq(0, 11, 1)
+verticallines <- c(0.025, 0.125,0.25, 0.75,0.875,0.975)
+
+xscalebreaks <- c(0.025, 0.125, 0.250, 0.500, 0.750, 0.875, 0.975)
+xscalelimits <- c(0,1)
+xscalelabels <- c("2.5", "12.5", "25.0", "50.0", "75.0", "87.5", "97.5")
+
+
+## Line plot PDSA with INMB
+ggPDSAINMBline <- ggplot(data = datpro, aes(x = Deciles, y = relINMBpar, group = Parameter2)) +
+  geom_line(aes(color=Parameter2, linetype=Parameter2)) +
+  geom_point(aes(color=Parameter2, shape = Parameter2)) +
+  scale_linetype_manual(values = linetype) +
+  scale_shape_manual(values = markertype) +
+  scale_y_continuous(name = paste("Incremental Net Monetary Benefit (prob. means)"
+                                  #\u20ac", 
+                                  #PDSA.BC.INMB.round,
+                                  #")"
+                                  ), 
+                     breaks = breakssetinmbpro,
+                     limits = limitsinmbpro, labels = xlabelsinmbpro) +
+  #xlab("Percentile of parameter distribution") + 
+  scale_x_continuous(name = "Percentile of parameter distribution", 
+                     breaks = xscalebreaks, 
+                     labels = xscalelabels, 
+                     limits = xscalelimits
+                     #,expand = expand_scale(mult = c(.4, .4))
+                     ) +
+  geom_vline(xintercept = verticallines, linetype="dashed",color = "grey80", size = 1) +
+  theme(panel.background = element_rect(fill="white", colour = "black"),
+        panel.grid.major.y = element_line(colour="grey80"), 
+        panel.grid.major.x = element_blank(),
+        legend.title = element_blank(), 
+        legend.position = "right", 
+        legend.text = element_text(size = 14), 
+        axis.text.x = element_text(size = 13), 
+        axis.text.y = element_text(size = 14), 
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_text(size = 16), 
+        #axis.ticks.y = element_line(colour="grey80")
+  ) +
+  geom_hline(yintercept = 0, color = "grey50", linetype = "dashed") +
+  geom_hline(yintercept = -PDSA.BC.INMB, color = "grey50")
+
+final.figure3.2 <- ggarrange(ggPDSAINMB, ggPDSAINMBline, heights = 1,
+                             ncol = 2, nrow = 1, align = "hv",  widths = c(1, 1.2))
+final.figure3.2
+
+png(filename="C:/Figure8.png", units="cm", width=49.5, height=30, res=1200)
+plot(final.figure3.2)
+dev.off()
+
+
+### PDSA INMB with categories reordered
+LabelsOrderedproinmb <- datpro$Labels[orderdatproinmb]
+LabelsOrderedproinmbs <- as.numeric(as.character(LabelsOrderedproinmb))
+
+labelsdatproinmb <- cbind(datpro$xCoords, LabelsOrderedproinmbs)
+
+ggPDSAINMBorder <- ggplot(data = datpro, aes(x = Parameter2, y = relINMBpar, fill = dodge)) +
+  geom_bar(stat = "identity", position = "dodge",
+           aes(x = fct_reorder(datpro$Parameter2, datpro$CatOrderInmb, .desc = FALSE), alpha = datpro$Alphas)) +
+  theme(axis.ticks.y = element_blank()) +
+  theme(panel.grid = element_blank()) +
+  theme(panel.grid.major.x = element_line(colour = "grey80")) +
+  theme(panel.grid.minor.x = element_line(colour = "grey80")) +
+  scale_y_continuous(name = paste("Incremental Net Monetary Benefit (prob. means)"
+                                  #\u20ac", 
+                                  #PDSA.BC.INMB.round,
+                                  #")"
+  ), 
+  breaks = breakssetinmbpro,
+  limits = limitsinmbpro, labels = xlabelsinmbpro) +
+  scale_fill_manual(breaks = c("lower 11","upper 31"), 
+                    labels=c("Lower range", "Upper range"),
+                    values = procolorsdodge) +
+  scale_x_discrete(name = "Parameter", 
+                   breaks = datpro$Parameter2, 
+                   labels = datpro$Parameter2) +
+  scale_alpha(range = c(0.6, 1.0), guide = 'none') + 
+  theme(legend.title = element_blank(), 
+        legend.position = "bottom", 
+        legend.text = element_text(size = 14)) +
+  theme(axis.text.x = element_text(size = 13), 
+        axis.text.y = element_text(size = 14), 
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_blank()) +
+  geom_vline(xintercept = seq(1, length(datpro[, 1]), 1) + 0.5, color = "grey74") +
+  geom_hline(yintercept = 0, color = "grey50", linetype = "dashed") +
+  geom_hline(yintercept = -PDSA.BC.INMB, color = "grey50") +
+  annotate("text", x = labelsdatproinmb[, 1], y = xaxismininmbpro, label = labelsdatproinmb[, 2], 
+           colour = "grey50", size = 5, hjust = 0) +
+  coord_flip() 
+
+ggPDSAINMBorder
+
+
+final.figure4 <- ggarrange(ggCDSA, ggPDSAINMBorder, heights = 1,
+                             ncol = 2, nrow = 1, align = "hv",  widths = c(1, 1))
+final.figure4
+
+png(filename="C:/Figure9.png", units="cm", width=45, height=30, res=1200)
+plot(final.figure4)
+dev.off()
+### ---------------------------End of PDSA--------------------------------- ###
+### ----------------------------------------------------------------------- ###
+
+
+### With direct labels for line plots
+ggPDSAINMBlinelabels <- ggplot(data = datpro, aes(x = Deciles, y = relINMBpar, group = Parameter2)) +
+  geom_line(aes(color=Parameter2, linetype=Parameter2)) +
+  geom_point(aes(color=Parameter2, shape = Parameter2)) +
+  scale_linetype_manual(values = linetype) +
+  scale_shape_manual(values = markertype) +
+  scale_y_continuous(name = paste("Incremental Net Monetary Benefit (prob. means)"
+                                  #\u20ac", 
+                                  #PDSA.BC.INMB.round,
+                                  #")"
+  ), 
+  breaks = breakssetinmbpro,
+  limits = limitsinmbpro, labels = xlabelsinmbpro) +
+  #xlab("Percentile of parameter distribution") + 
+  scale_x_continuous(name = "Percentile of parameter distribution", 
+                     breaks = xscalebreaks, 
+                     labels = xscalelabels, 
+                     limits = xscalelimits
+                     ,expand = expand_scale(mult = c(0, .5))
+  ) +
+  geom_vline(xintercept = verticallines, linetype="dashed",color = "grey80", size = 1) +
+  theme(panel.background = element_rect(fill="white", colour = "black"),
+        panel.grid.major.y = element_line(colour="grey80"), 
+        panel.grid.major.x = element_blank(),
+        legend.title = element_blank(), 
+        legend.position = "right", 
+        legend.text = element_text(size = 14), 
+        axis.text.x = element_text(size = 13), 
+        axis.text.y = element_text(size = 14), 
+        axis.title.x = element_text(size = 16), 
+        axis.title.y = element_text(size = 16), 
+        #axis.ticks.y = element_line(colour="grey80")
+  ) +
+  geom_hline(yintercept = 0, color = "grey50", linetype = "dashed") +
+  geom_hline(yintercept = -PDSA.BC.INMB, color = "grey50")
+
+ggPDSAINMBll <- ggPDSAINMBlinelabels +
+geom_dl(aes(label = datpro$FullName, colour=datpro$Parameter2), 
+        method = list("last.bumpup"), 
+        cex = 1.5, 
+        hjust = 1) 
+#+ theme(plot.margin = unit(c(1,12,1,1), "lines")) #+
+#theme(plot.margin = unit(c(0,4,0,0), "cm"))
+
+final.figure5 <- ggarrange(ggPDSAINMB, ggPDSAINMBll, heights = 1,
+                             ncol = 2, nrow = 1, align = "hv",  widths = c(1, 1.2))
+final.figure5
+
+png(filename="C:/Figure8.png", units="cm", width=49.5, height=30, res=1200)
+plot(final.figure5)
+dev.off()
+
+ggPDSAINMBline +
+  geom_dl(aes(label = datpro$FullName, colour=datpro$Parameter2), 
+          method = list("first.bumpup"), 
+          cex = 1.5, 
+          hjust = 1) #+
+
+ggPDSAINMBlinelabels +
+geom_text(
+        aes(label = datpro$FullName, colour=datpro$Parameter2, x = Inf, y = values), hjust = -.2) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_colour_discrete(guide = 'none')  +  
+  theme_bw() +  
+  theme(plot.margin = unit(c(1,3,1,1), "lines"))  
+
+
+
+
+## Figure 3
+uniformdist <- c(600,	
+                 663.1578947,	
+                 726.3157895,	
+                 789.4736842,
+                 852.6315789,
+                 915.7894737,
+                 978.9473684,
+                 1042.105263,
+                 1105.263158,
+                 1168.421053,
+                 1200,
+                 1231.578947,	
+                 1294.736842,	
+                 1357.894737,	
+                 1421.052632,	
+                 1484.210526,	
+                 1547.368421,	
+                 1610.526316,	
+                 1673.684211,	
+                 1736.842105,	
+                 1800
+)
+
+distributiondist <- c(600,	
+                      759.3190031,	
+                      847.8457596,	
+                      913.8959802,	
+                      968.7462528,	
+                      1017.008844,	
+                      1061.090655,
+                      1102.455545,	
+                      1142.10554,	
+                      1180.803695,	
+                      1200, 
+                      1219.196305,	
+                      1257.89446,	
+                      1297.544455,	
+                      1338.909345,	
+                      1382.991156,	
+                      1431.253747,	
+                      1486.10402,	
+                      1552.15424,	
+                      1640.680997,	
+                      1800
+)
+
+
+fig2deciles <- c(0.025,	0.075,	0.125,	0.175, 0.225,	0.275,	
+                 0.325,	0.375,	0.425,	0.475, 0.500,	0.525,	
+                 0.575,	0.625,	0.675,	0.725, 0.775,	0.825,	
+                 0.875,	0.925,	0.975
+)
+
+fig2dat <- as.data.frame(cbind(uniformdist,distributiondist,fig2deciles))
+alldat <- c(uniformdist,distributiondist)
+disttype <- rep(1:2, each = 21)
+fig2dat <- as.data.frame(cbind(rep(fig2deciles,2),alldat, disttype))
+
+Figure2 <- ggplot(data = fig2dat, aes(x = V1, y = alldat, colour = as.factor(disttype))) + 
+  geom_line(aes(color=as.factor(disttype))) +
+  geom_point() +
+  scale_y_continuous(name = paste("Costs during progression-free survival (\u20ac per cycle)"), 
+                     breaks = c(600,800, 1000, 1200, 1400, 1600, 1800),
+                     limits = c(600,1800)) +
+  scale_x_continuous(name = "Percentile of parameter distribution") +
+  theme(legend.position = "bottom") + 
+  scale_colour_discrete(name  ="Type of distribution",
+                        labels=c("Uniform", "Normal")) +
+  theme(legend.text = element_text(size = 16), 
+  axis.text.x = element_text(size = 12), 
+  axis.text.y = element_text(size = 12), 
+  axis.title.x = element_text(size = 16), 
+  axis.title.y = element_text(size = 16), 
+  legend.title = element_text(size=16)
+  ) +
+  geom_vline(xintercept = 0.125, linetype="dashed",color = "grey80", size = 1) +
+  geom_vline(xintercept = 0.875, linetype="dashed",color = "grey80", size = 1)
+  
+Figure2
+
+png(filename="C:/Figure3.png", units="in", width=12, height=8, res=600)
+plot(Figure2)
+dev.off()
+
+
+##-----------------end of script----------------------##
